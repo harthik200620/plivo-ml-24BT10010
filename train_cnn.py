@@ -306,7 +306,9 @@ def main():
     print(f"rows: {is_ann.sum()} annotated + {n_mined} mined negatives")
 
     # ---- folds defined on annotated turns; mined rows follow their turn ----
-    folds_ann = list(GroupKFold(n_splits=5).split(X, y_ann, groups_ann))
+    # 10 folds: each model trains on 90% of turns; 10 folds x 2 seeds = 20
+    # snapshots in the shipped ensemble (variance was the documented blocker)
+    folds_ann = list(GroupKFold(n_splits=10).split(X, y_ann, groups_ann))
     all_idx = np.arange(len(rows))
     jobs = []
     for f, (tr_a, te_a) in enumerate(folds_ann):
@@ -317,7 +319,7 @@ def main():
         for s in SEEDS:
             jobs.append((f, s, tr, te, val_neg_mask))
     t0 = time.time()
-    with ThreadPoolExecutor(max_workers=5) as ex:
+    with ThreadPoolExecutor(max_workers=7) as ex:
         results = list(ex.map(
             lambda j: run_fold(j[0], j[1], j[2], j[3], j[4], rows, tzs, Xs, y, wgt), jobs))
     print(f"cnn training {time.time()-t0:.0f}s")

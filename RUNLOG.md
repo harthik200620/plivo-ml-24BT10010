@@ -1,8 +1,8 @@
 # RUNLOG — End-of-Turn Detection (24BT10010)
 
 Metric: mean response delay (ms) @ ≤5% interrupted turns, official `score.py`.
-All model scores below are **out-of-fold** (5-fold GroupKFold by turn) — the model scoring a
-pause has never seen that turn, so these estimate unseen-turn performance, not train fit.
+All model scores below are **out-of-fold** (GroupKFold by turn; 5-fold unless noted) — the model
+scoring a pause has never seen that turn, so these estimate unseen-turn performance, not train fit.
 (AUC = eot-vs-hold ranking quality, the scorer's own diagnostic.)
 
 | # | run | english | hindi | what changed / what we learned |
@@ -18,10 +18,14 @@ pause has never seen that turn, so these estimate unseen-turn performance, not t
 | 8 | Merge attempt: run-6 CNN config + run-7 cost-weighted GBM, TTA kept | 1125 ms (AUC 0.727) | 799 ms (AUC 0.797) | Better than run 7, still short of run 6 (1080/784). Reading runs 6–8 together: CNN fold-to-fold variance (val AUC 0.61–0.87 across folds/seeds) swamps the deltas from TTA and loss tweaks. Conclusion: stop tuning what the noise floor hides. |
 | 9 | **FINAL**: run-6 CNN recipe (rerun; torch CPU threading makes it near- but not bit-deterministic) + cost-weighted tabular models, ensemble w=0.6 | **1094 ms** (AUC 0.739, op: thr 0.60 / 450 ms) | **755 ms** (AUC 0.811, op: thr 0.45 / 650 ms) | Confirmed with the official `score.py` on the OOF csvs. Best Hindi of all runs (−11% vs its 850 ms baseline, which a silence timer cannot beat); English −32% vs its 1600 ms baseline. Artifacts `model.pkl` + `model_cnn.pt` are from this run; `predictions_*.csv` written by `predict.py`, the exact shipped path, which was also smoke-tested on a fresh folder copy with `label`/`pause_end` columns removed (248/248 rows). |
 
-**Final numbers (out-of-fold, official scorer):** english **1600 → 1094 ms**, hindi **850 → 755 ms**
-at ≤5% interrupted turns. Note `predictions_*.csv` for the provided folders come from the final
-model which trained on all provided turns — score.py on those files shows train-fit (~0.99 AUC),
-not generalization; the honest unseen-turn estimate is the OOF table above.
+| 10 | Variance-reduction retrain: 10-fold × 2 seeds = 20 snapshots, each fold training on 90% of turns | 1116 ms (AUC **0.765**) | 824 ms (AUC **0.820**) | **Rejected despite the best AUCs of the night** — global ranking improved but recall at the ≤5%-cutoff operating region got worse (Hindi +69 ms). The metric prices the top of the ranking against long holds, not the whole curve. Also rejected: merging both snapshot pools (30 models) — a mixed pool has no honest OOF, and we don't ship numbers we can't defend. |
+| 11 | **FINAL (adopted)**: run-9 snapshots + post-hoc blend refinement on OOF — weight grid at 0.05 steps, prob- vs logit-space blending, objective 0.3·EN + 0.7·HI to match the announced mostly-Hindi hidden set → w=0.55, prob space | **1105 ms** (AUC 0.738) | **745 ms** (AUC 0.810) | Trades +11 ms English for −10 ms Hindi — the right trade for the hidden distribution, chosen without touching the models. Verified with the official `score.py` on the shipped `oof_*.csv`. |
+
+**Final numbers (out-of-fold, official scorer):** english **1600 → 1105 ms**, hindi **850 → 745 ms**
+at ≤5% interrupted turns (AUC 0.738 / 0.810). Inference: 248 pause decisions in 17 s on a laptop
+CPU including model load (~55–70 ms per decision). Note `predictions_*.csv` for the provided
+folders come from the final model which trained on all provided turns — score.py on those files
+shows train-fit (~0.99 AUC), not generalization; the honest unseen-turn estimate is the OOF table.
 
 ## Listening notes (human)
 Worst OOF errors were exported as clips (4 s before the pause + 1.5 s in) and listened to by me:

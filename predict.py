@@ -54,6 +54,7 @@ def main():
         m.eval()
         models.append(m)
     ens_w = float(cnn_pack["ens_w"])
+    avg_mode = cnn_pack.get("avg_mode", "prob")   # prob- or logit-space blending
     s_mu, s_sd = cnn_pack["scalar_mu"], cnn_pack["scalar_sd"]
     sidx = [FEATURE_NAMES.index(s) for s in SCALARS]
 
@@ -109,7 +110,13 @@ def main():
                 mel_t = torch.from_numpy(windows[sh][ok])
                 ps_all += [torch.sigmoid(m(mel_t, sc_t)).numpy() for m in models]
             p_cnn = np.mean(ps_all, axis=0)
-        p[ok] = ens_w * p_cnn + (1 - ens_w) * p_tab
+        if avg_mode == "logit":
+            eps = 1e-6
+            lc = np.log((p_cnn + eps) / (1 - p_cnn + eps))
+            lt = np.log((p_tab + eps) / (1 - p_tab + eps))
+            p[ok] = 1 / (1 + np.exp(-(ens_w * lc + (1 - ens_w) * lt)))
+        else:
+            p[ok] = ens_w * p_cnn + (1 - ens_w) * p_tab
 
     out = df[["turn_id", "pause_index"]].copy()
     out["p_eot"] = np.round(p, 4)

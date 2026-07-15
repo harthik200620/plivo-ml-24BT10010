@@ -44,8 +44,10 @@ floor in a fraction of that.
   <tr><th>system</th><th class="num">english delay ⬇</th><th class="num">english AUC</th><th class="num">hindi delay ⬇</th><th class="num">hindi AUC</th></tr>
   <tr><td>silence-only baseline (given)</td><td class="num">1600 ms</td><td class="num">0.514</td><td class="num">850 ms</td><td class="num">0.501</td></tr>
   <tr><td>tabular models (42 causal prosody/structure features, cost-weighted)</td><td class="num">1222 ms</td><td class="num">0.686</td><td class="num">808 ms</td><td class="num">0.743</td></tr>
-  <tr class="win"><td>final: CNN (mel+F0, mined negatives) ⊕ tabular</td><td class="num">1094 ms</td><td class="num">0.739</td><td class="num">755 ms</td><td class="num">0.811</td></tr>
+  <tr class="win"><td>final: CNN (mel+F0, mined negatives) ⊕ tabular</td><td class="num">1105 ms</td><td class="num">0.738</td><td class="num">745 ms</td><td class="num">0.810</td></tr>
 </table>
+<p>Inference cost: 248 pause decisions in 17&nbsp;s on a laptop CPU including model load —
+~55–70&nbsp;ms per decision, comfortably real-time for a live agent.</p>
 <img src="fig_delay_curve.png" alt="delay vs interruption budget">
 <img src="fig_history.png" alt="iteration history">
 
@@ -66,8 +68,9 @@ floor in a fraction of that.
     (energy fall-time, trailing-tail level/centroid/voicing), pitch finality (loudness-gated
     F0 slope/level/percentile, creak), hesitation cues (flat-pitch final runs), and turn context
     (elapsed time, pause index, prior-pause durations, speech fraction).</li>
-<li><b>Ensemble.</b> Probability average, weight 0.6 on the CNN (chosen on out-of-fold
-    predictions). The tabular models also use deployment-aligned cost weights: a hold only
+<li><b>Ensemble.</b> Probability average, weight 0.55 on the CNN — chosen on out-of-fold
+    predictions with a 0.3·EN + 0.7·HI objective, because the hidden test is announced as
+    mostly Hindi. The tabular models also use deployment-aligned cost weights: a hold only
     causes a cutoff if it outlasts the action delay, so long holds carry the training cost —
     same AUC, but errors migrate to harmless short holds (−34 ms EN, −49 ms HI).</li>
 </ul>
@@ -94,12 +97,26 @@ rules (correctly) deny us: no ASR, no pretrained models. That is the plateau.
     0.685 for the tabular models — the features are turn-relative (semitones vs the caller's own
     median, dB vs the caller's own speech level) precisely so they transfer; the shipped model
     trains on both languages pooled.</li>
-<li><code>predict.py</code> was smoke-tested on a fresh copy of a data folder at a different path
-    to simulate the unseen-folder run.</li>
+<li><code>predict.py</code> was smoke-tested on a fresh folder copy at a different path (incl. a
+    variant with <code>label</code>/<code>pause_end</code> columns stripped) and on five
+    pathological folders: a pause 0.3&nbsp;s into the file, a wav shorter than the 2&nbsp;s
+    window, scrambled row order, a missing wav (row falls back to the class prior instead of
+    crashing), and unknown extra columns — all produce complete predictions.</li>
 <li>Causality: every audio frame used ends at or before <code>pause_start</code>; the current
     pause's duration and label are never read. Enforced in one place per model
     (<code>features_eot.pause_features</code>, <code>train_cnn.make_window</code>).</li>
 </ul>
+
+<h2>The MD files, summarized</h2>
+<p><b>RUNLOG.md in brief:</b> eleven scored runs. Silence baseline (1600/850&nbsp;ms) → scalar prosody
+(&minus;350&nbsp;ms EN, Hindi unmoved) → plotting turns revealed the real cue (sharp cut vs gradual
+decay) and a ~110&nbsp;ms annotation hangover → CNN on mel+F0 with 882 mined micro-gap negatives
+broke Hindi through its baseline → deployment-aligned cost weighting improved the tabular models
+(and hurt the CNN — measured, rolled back where it hurt) → final ensemble. Three negative results
+are documented with the reason they failed, because that is what an honest search looks like.
+<br><b>NOTES.md in brief:</b> the signal is offset shape + speaker-relative pitch finality + turn
+structure; the plateau is informational — the remaining errors need the words, and pretrained
+ASR is (rightly) against the rules.</p>
 
 <h2>Who did what <span class="tag h">human</span> <span class="tag a">coding agent</span></h2>
 <table>
