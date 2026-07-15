@@ -1,0 +1,7 @@
+# regenerable caches / scratch
+contours_cache.pkl
+oof_gbm_mined.npy
+oof_gbm_dw.npy
+__pycache__/
+# raw audio snippets from the provided dataset (not republished publicly)
+errors/

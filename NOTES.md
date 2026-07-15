@@ -1,0 +1,12 @@
+# NOTES
+
+1. The model reads *how* speech stops, not just *that* it stops: windows are anchored at the detected acoustic offset (the labels' `pause_start` trails it by a ~110 ms VAD hangover we measured and correct for).
+2. Signal, acoustic: offset shape (holds cut off sharply mid-phrase; true ends decay gradually, often with a trailing breath), terminal pitch fall vs. flat filled-pause pitch, creak, phrase-final lengthening — all speaker-relative (semitones vs. the caller's own median, dB vs. their own speech level) so they transfer across languages and channels.
+3. Signal, structural: elapsed time, pause index, prior-pause durations, speaking fraction.
+4. Two models see these differently — a ~90k-param CNN over log-mel + explicit F0/voicing channels ending at the offset, and GBM+logistic on 42 causal scalars — and their probability average is the submission.
+5. The CNN also trains on ~880 mined hard negatives: unannotated <100 ms intra-speech gaps are guaranteed continuations, exactly the false-cutoff acoustics that cost latency budget (they help the CNN but hurt the tabular model, which we verified and rolled back).
+6. Result (out-of-fold, GroupKFold by turn, official scorer): **1094 ms English / 755 ms Hindi** mean delay @ ≤5% interrupted turns vs. 1600/850 ms silence baseline (AUC 0.739 / 0.811).
+7. Listening to the worst out-of-fold errors confirmed two failure classes: false alarms are *semantic* incompleteness that sounds final (a self-repaired date "July thir— …9th, 9th", a mid-sentence "…yaar tu mujhe—"), and misses are true endings *without* a terminal fall (a dictated "…at yahoo.com" in flat list prosody, a question ending on a rise).
+8. Since the rules allow no ASR/pretrained models, lexical completeness is unreachable, and that is where the similarity of eot and hold acoustics caps the ranking — the plateau is informational, not optimizational.
+9. With one more day: train a lightweight self-supervised phone-rate/next-frame predictor on the provided audio itself (rules-legal) to approximate syntactic completeness, calibrate per-language operating points, and distill the ensemble into one small streaming model with an explicit latency/quality knob.
+10. Everything reported is reproducible: `train_model.py` + `train_cnn.py` regenerate the artifacts from the provided data alone, and `predict.py` runs on unseen same-schema folders.

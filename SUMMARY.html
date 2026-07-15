@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>End-of-Turn Detection — Summary (24BT10010)</title>
+<style>
+  :root { --ink:#1a1a1a; --mut:#666; --line:#e3e3e3; --blue:#1565c0; --green:#2e7d32; --orange:#ef6c00; }
+  body { font:15px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; color:var(--ink);
+         max-width:960px; margin:2rem auto; padding:0 1.2rem; }
+  h1 { font-size:1.6rem; margin-bottom:.2rem; } h2 { font-size:1.15rem; margin-top:2.2rem;
+       border-bottom:1px solid var(--line); padding-bottom:.25rem; }
+  .sub { color:var(--mut); margin-top:0; }
+  table { border-collapse:collapse; width:100%; margin:.8rem 0; font-size:14px; }
+  th,td { border:1px solid var(--line); padding:.45rem .6rem; text-align:left; vertical-align:top; }
+  th { background:#f7f7f7; }
+  .num { text-align:right; font-variant-numeric:tabular-nums; }
+  .win { background:#e8f5e9; font-weight:600; }
+  img { max-width:100%; border:1px solid var(--line); border-radius:6px; margin:.4rem 0; }
+  code { background:#f4f4f4; padding:.08rem .3rem; border-radius:4px; font-size:13px; }
+  .tag { display:inline-block; padding:.1rem .5rem; border-radius:99px; font-size:12px; font-weight:600; }
+  .tag.h { background:#fff3e0; color:var(--orange); } .tag.a { background:#e3f2fd; color:var(--blue); }
+  .callout { border-left:4px solid var(--blue); background:#f6f9fe; padding:.6rem .9rem; margin:.8rem 0; }
+  ul { padding-left:1.2rem; }
+</style>
+</head>
+<body>
+
+<h1>End-of-Turn Detection for a Live Voice Agent</h1>
+<p class="sub">Plivo ML assignment · roll 24BT10010 · STT track · all scores are out-of-fold (models never scored a turn they trained on)</p>
+
+<h2>The problem, and why the status quo loses 1.6 seconds</h2>
+<p>
+A voice agent must decide at every pause: <em>is the caller done, or just thinking?</em>
+The baseline every production VAD uses — wait for N&nbsp;ms of silence — needs
+<b>N ≈ 1600&nbsp;ms</b> on the English data to keep interruptions under 5%, because
+mid-turn hesitations routinely last a second or more (English hold pauses: p95 = 1.8&nbsp;s).
+Every one of those 1600&nbsp;ms is dead air the caller hears after they finished speaking.
+Our model reads <em>how</em> the speech stopped, not just <em>that</em> it stopped, and takes the
+floor in a fraction of that.
+</p>
+
+<h2>Result</h2>
+<table>
+  <tr><th>system</th><th class="num">english delay ⬇</th><th class="num">english AUC</th><th class="num">hindi delay ⬇</th><th class="num">hindi AUC</th></tr>
+  <tr><td>silence-only baseline (given)</td><td class="num">1600 ms</td><td class="num">0.514</td><td class="num">850 ms</td><td class="num">0.501</td></tr>
+  <tr><td>tabular models (42 causal prosody/structure features, cost-weighted)</td><td class="num">1222 ms</td><td class="num">0.686</td><td class="num">808 ms</td><td class="num">0.743</td></tr>
+  <tr class="win"><td>final: CNN (mel+F0, mined negatives) ⊕ tabular</td><td class="num">1094 ms</td><td class="num">0.739</td><td class="num">755 ms</td><td class="num">0.811</td></tr>
+</table>
+<img src="fig_delay_curve.png" alt="delay vs interruption budget">
+<img src="fig_history.png" alt="iteration history">
+
+<h2>How it works</h2>
+<ul>
+<li><b>Anchor at the true speech offset.</b> The labels' <code>pause_start</code> trails the acoustic
+    offset by a ~110&nbsp;ms VAD hangover (we measured it: the last 100&nbsp;ms before
+    <code>pause_start</code> sit ~44&nbsp;dB below speech). All windows end at the detected offset.</li>
+<li><b>Acoustic model.</b> A ~90k-parameter CNN over 2&nbsp;s of 48-band log-mel <em>plus explicit
+    F0-semitone and voicing channels</em> (mel smears pitch; the terminal fall needs a track),
+    ending at the offset. Augmentation: end-jitter, gain, mel noise, time/freq masks.
+    2 seeds × 5 folds = 10 snapshots averaged.</li>
+<li><b>Mined hard negatives.</b> Every unannotated intra-speech silence &lt;100&nbsp;ms is a
+    <em>guaranteed continuation</em> — the caller kept talking. We mine ~880 of them (≈2.8× more
+    negatives) and train the CNN to keep quiet there. This targets exactly the false-cutoff
+    acoustics the metric punishes.</li>
+<li><b>Turn-structure model.</b> GBM + logistic regression on 42 causal scalars: offset shape
+    (energy fall-time, trailing-tail level/centroid/voicing), pitch finality (loudness-gated
+    F0 slope/level/percentile, creak), hesitation cues (flat-pitch final runs), and turn context
+    (elapsed time, pause index, prior-pause durations, speech fraction).</li>
+<li><b>Ensemble.</b> Probability average, weight 0.6 on the CNN (chosen on out-of-fold
+    predictions). The tabular models also use deployment-aligned cost weights: a hold only
+    causes a cutoff if it outlasts the action delay, so long holds carry the training cost —
+    same AUC, but errors migrate to harmless short holds (−34 ms EN, −49 ms HI).</li>
+</ul>
+<img src="fig_streaming.png" alt="model output at each pause of two example turns">
+
+<h2>What the model actually keys on (and where it plateaus)</h2>
+<p>
+Plotting turns showed the discriminative pattern directly: <b>holds cut off sharply</b> —
+energy drops from full speech level straight into the floor mid-phrase — while <b>true ends
+decay gradually</b>, often with a trailing breath or an unstressed final syllable, and a pitch
+fall into the offset. Hindi hesitations are shorter and more often <em>filled</em> (flat-pitch
+vowel), which is why a plain silence timer already does 850&nbsp;ms there and why the pitch-flatness
+and offset-shape features carry more of the Hindi signal.
+The remaining errors are mostly <em>semantic</em>: utterances that are prosodically final but
+syntactically incomplete (and vice versa) — separating those needs lexical content, which the
+rules (correctly) deny us: no ASR, no pretrained models. That is the plateau.
+</p>
+
+<h2>Honest validation</h2>
+<ul>
+<li>Every reported score is <b>out-of-fold</b> (5-fold GroupKFold by turn) — no score in this
+    report comes from a model scoring its own training turns.</li>
+<li>Cross-language stress test (hidden set is mostly Hindi): train-English→score-Hindi AUC
+    0.685 for the tabular models — the features are turn-relative (semitones vs the caller's own
+    median, dB vs the caller's own speech level) precisely so they transfer; the shipped model
+    trains on both languages pooled.</li>
+<li><code>predict.py</code> was smoke-tested on a fresh copy of a data folder at a different path
+    to simulate the unseen-folder run.</li>
+<li>Causality: every audio frame used ends at or before <code>pause_start</code>; the current
+    pause's duration and label are never read. Enforced in one place per model
+    (<code>features_eot.pause_features</code>, <code>train_cnn.make_window</code>).</li>
+</ul>
+
+<h2>Who did what <span class="tag h">human</span> <span class="tag a">coding agent</span></h2>
+<table>
+<tr><th>decision / work</th><th>who</th></tr>
+<tr><td>Track choice, "act like the evaluator" strategy, push for a stronger-than-first-pass solution, library-compliance audit request, final quality bar</td><td><span class="tag h">human</span></td></tr>
+<tr><td>Listening to the worst error clips and describing what they contain (hesitation vs. finality cues)</td><td><span class="tag h">human</span> (notes in RUNLOG)</td></tr>
+<tr><td>Metric analysis (what the scorer actually optimizes), causality design, feature engineering, offset-anchoring diagnosis, micro-gap mining idea, CNN architecture + augmentation, OOF/transfer evaluation harness, all code, figures, this report</td><td><span class="tag a">coding agent</span> (Claude Fable), direction and acceptance by <span class="tag h">human</span></td></tr>
+<tr><td>Every scoring run logged with what changed and why (see RUNLOG.md) — including the two ideas that made things <em>worse</em> (v2 anchor-only, GBM+mined) and were rolled back</td><td>joint</td></tr>
+</table>
+
+<h2>Files</h2>
+<p><code>predict.py</code> (inference CLI) · <code>features_eot.py</code> · <code>train_model.py</code> ·
+<code>train_cnn.py</code> · <code>model.pkl</code>/<code>model_cnn.pt</code> ·
+<code>RUNLOG.md</code> (full iteration log) · <code>NOTES.md</code> ·
+<code>predictions_english.csv</code>/<code>predictions_hindi.csv</code> ·
+<code>make_figures.py</code> (report images only — matplotlib is not in the model pipeline).</p>
+
+</body>
+</html>
